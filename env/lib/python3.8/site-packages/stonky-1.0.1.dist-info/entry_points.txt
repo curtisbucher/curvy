@@ -1,0 +1,3 @@
+[console_scripts]
+stonky = stonky.__main__:main
+
