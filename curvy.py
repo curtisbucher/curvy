@@ -4,10 +4,16 @@ import ast
 def main(vm, user_input):
     tree = ast.parse(user_input)
     compiler = Compiler()
-    # optimizer = Optimizer()
-    # tree = optimizer.visit(tree)
+
+    # Optimizing tree
+    optimizer = Optimizer()
+    tree = optimizer.visit(tree)
+
+    # Compiling tree and building bytecode
     compiler.visit(tree)
     bytecode = compiler.build()
+
+    # Runing bytecode in the virtual machine
     vm.run(bytecode)
 
 
@@ -25,6 +31,7 @@ OPNAMES = [
     "DUP_TOP",
     "LOAD_NAME",
     "STORE_NAME",
+    "DEL",
     "BUILD_LIST",
     "BUILD_TUPLE",
     "BUILD_SET",
@@ -41,22 +48,94 @@ OPNAMES = [
     "BIT_XOR",
     "LSHIFT",
     "RSHIFT",
+    "UNARY_ADD",
+    "UNARY_SUB",
+    "NOT",
+    "INVERT",
 ]
 
 OPCODES = {opname: opcode for opcode, opname in enumerate(OPNAMES)}
 
 
-# class Optimizer(ast.NodeTransformer):
+class Optimizer(ast.NodeTransformer):
+    """ Given an AST, optimizes things that dont need to be compiled. Inheritance takes care of visiting functions from tree."""
 
-#     def visit_BinOp(self, node):
-#         node = self.generic_visit(node)
-#         if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
-#             if isinstance(node.op, ast.Add):
-#                 return ast.Constant(node.left.value + node.right.value)
+    def visit_BinOp(self, node):
+        """ Optimizes BinOp nodes between two constants """
+        node = self.generic_visit(node)
+        if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+            if isinstance(node.op, ast.Add):
+                return ast.Constant(node.left.value + node.right.value)
+            elif isinstance(node.op, ast.Sub):
+                return ast.Constant(node.left.value - node.right.value)
+            elif isinstance(node.op, ast.Mult):
+                return ast.Constant(node.left.value * node.right.value)
+            elif isinstance(node.op, ast.Div):
+                return ast.Constant(node.left.value / node.right.value)
+            elif isinstance(node.op, ast.FloorDiv):
+                return ast.Constant(node.left.value // node.right.value)
+            elif isinstance(node.op, ast.Mod):
+                return ast.Constant(node.left.value % node.right.value)
+            elif isinstance(node.op, ast.Pow):
+                return ast.Constant(node.left.value ** node.right.value)
+            elif isinstance(node.op, ast.BitAnd):
+                return ast.Constant(node.left.value & node.right.value)
+            elif isinstance(node.op, ast.BitOr):
+                return ast.Constant(node.left.value | node.right.value)
+            elif isinstance(node.op, ast.BitXor):
+                return ast.Constant(node.left.value ^ node.right.value)
+            elif isinstance(node.op, ast.LShift):
+                return ast.Constant(node.left.value << node.right.value)
+            elif isinstance(node.op, ast.RShift):
+                return ast.Constant(node.left.value >> node.right.value)
+
+    def visit_List(self, node):
+        """ Optimizes building list of only constants."""
+        new_elts = []
+        for child in node.elts:
+            # Optimizing child nodes, for nested constants
+            child = Optimizer.visit(self, child)
+            if not isinstance(child, ast.Constant):
+                return node
+            new_elts.append(child.value)
+        return ast.Constant(new_elts)
+
+    def visit_Tuple(self, node):
+        """ Optimizes building tuple of only constants."""
+        new_elts = []
+        for child in node.elts:
+            # Optimizing child nodes, for nested constants
+            child = Optimizer.visit(self, child)
+            if not isinstance(child, ast.Constant):
+                return node
+            new_elts.append(child.value)
+        return ast.Constant(tuple(new_elts))
+
+    def visit_Set(self, node):
+        """ Optimizes building set of only constants."""
+        new_elts = []
+        for child in node.elts:
+            # Optimizing child nodes, for nested constants
+            child = Optimizer.visit(self, child)
+            if not isinstance(child, ast.Constant):
+                return node
+            new_elts.append(child.value)
+        return ast.Constant(set(new_elts))
+
+    def visit_Dict(self, node):
+        """ Optimizes building dict of only constants."""
+        new_value_keys = []
+        for x in range(len(node.keys)):
+            # Optimizing child nodes, for nested constants
+            key = Optimizer.visit(self, node.keys[x])
+            value = Optimizer.visit(self, node.values[x])
+            if not isinstance(key, ast.Constant) or not isinstance(value, ast.Constant):
+                return node
+            new_value_keys.append((key.value, value.value))
+        return ast.Constant(dict(new_value_keys))
 
 
 class Compiler:
-
     def __init__(self):
         self.names = []
         self.consts = []
@@ -89,11 +168,6 @@ class Compiler:
             self.visit(target)
         self.visit(node.targets[-1])
 
-    def visit_BinOp(self, node):
-        self.visit(node.left)
-        self.visit(node.right)
-        self.visit(node.op)
-
     def visit_Constant(self, node):
         self.emit("LOAD_CONST", len(self.consts))
         self.consts.append(node.value)
@@ -106,6 +180,11 @@ class Compiler:
         else:
             assert False, node.ctx  # pragma: no cover
         self.names.append(node.id)
+
+    def visit_Delete(self, node):
+        for target in node.targets:
+            self.names.append(target.id)
+            self.emit("DEL", self.names.index(target.id))
 
     def visit_Tuple(self, node):
         for child in node.elts:
@@ -127,6 +206,11 @@ class Compiler:
             self.visit(node.values[x])
             self.visit(node.keys[x])
         self.emit("BUILD_DICT", len(node.keys))
+
+    def visit_BinOp(self, node):
+        self.visit(node.left)
+        self.visit(node.right)
+        self.visit(node.op)
 
     def visit_Add(self, node):
         self.emit("BINARY_ADD", 0)
@@ -163,6 +247,31 @@ class Compiler:
 
     def visit_RShift(self, node):
         self.emit("RSHIFT", 0)
+
+    def visit_UnaryOp(self, node):
+        self.visit(node.operand)
+        self.visit(node.op)
+
+    def visit_UAdd(self, node):
+        self.emit("UNARY_ADD", 0)
+
+    def visit_USub(self, node):
+        self.emit("UNARY_SUB", 0)
+
+    def visit_Not(self, node):
+        self.emit("UNARY_NOT", 0)
+
+    def visit_Invert(self, node):
+        self.emit("UNARY_INVERT", 0)
+
+    def visit_AugAssign(self, node):
+        # Loading value from name
+        self.visit(ast.Name(node.target.id, ast.Load()))
+        # Operating
+        self.visit(node.value)
+        self.visit(node.op)
+        # Storing value
+        self.visit(ast.Name(node.target.id, ast.Store()))
 
 
 class VirtualMachine:
@@ -241,6 +350,22 @@ class VirtualMachine:
         left = self.stack.pop()
         self.stack.append(left >> right)
 
+    def visit_UNARY_ADD(self, oparg):
+        operand = self.stack.pop()
+        self.stack.append(+operand)
+
+    def visit_UNARY_SUB(self, oparg):
+        operand = self.stack.pop()
+        self.stack.append(-operand)
+
+    def visit_UNARY_NOT(self, oparg):
+        operand = self.stack.pop()
+        self.stack.append(not operand)
+
+    def visit_UNARY_INVERT(self, oparg):
+        operand = self.stack.pop()
+        self.stack.append(~operand)
+
     def visit_PRINT_EXPR(self, oparg):
         print(self.stack.pop())
 
@@ -251,6 +376,11 @@ class VirtualMachine:
     def visit_LOAD_NAME(self, oparg):
         name = self.bytecode.names[oparg]
         self.stack.append(self.variables[name])
+
+    def visit_DEL(self, oparg):
+        name = self.bytecode.names[oparg]
+        # Deleting in virtual machine
+        del self.variables[name]
 
     def visit_DUP_TOP(self, oparg):
         self.stack.append(self.stack[-1])
