@@ -50,8 +50,9 @@ OPNAMES = [
     "RSHIFT",
     "UNARY_ADD",
     "UNARY_SUB",
-    "NOT",
-    "INVERT",
+    "UNARY_NOT",
+    "UNARY_INVERT",
+    "INDEX",
 ]
 
 OPCODES = {opname: opcode for opcode, opname in enumerate(OPNAMES)}
@@ -88,51 +89,18 @@ class Optimizer(ast.NodeTransformer):
                 return ast.Constant(node.left.value << node.right.value)
             elif isinstance(node.op, ast.RShift):
                 return ast.Constant(node.left.value >> node.right.value)
-
-    def visit_List(self, node):
-        """ Optimizes building list of only constants."""
-        new_elts = []
-        for child in node.elts:
-            # Optimizing child nodes, for nested constants
-            child = Optimizer.visit(self, child)
-            if not isinstance(child, ast.Constant):
-                return node
-            new_elts.append(child.value)
-        return ast.Constant(new_elts)
+        return node
 
     def visit_Tuple(self, node):
         """ Optimizes building tuple of only constants."""
+        self.generic_visit(node)
         new_elts = []
         for child in node.elts:
             # Optimizing child nodes, for nested constants
-            child = Optimizer.visit(self, child)
             if not isinstance(child, ast.Constant):
                 return node
             new_elts.append(child.value)
         return ast.Constant(tuple(new_elts))
-
-    def visit_Set(self, node):
-        """ Optimizes building set of only constants."""
-        new_elts = []
-        for child in node.elts:
-            # Optimizing child nodes, for nested constants
-            child = Optimizer.visit(self, child)
-            if not isinstance(child, ast.Constant):
-                return node
-            new_elts.append(child.value)
-        return ast.Constant(set(new_elts))
-
-    def visit_Dict(self, node):
-        """ Optimizes building dict of only constants."""
-        new_value_keys = []
-        for x in range(len(node.keys)):
-            # Optimizing child nodes, for nested constants
-            key = Optimizer.visit(self, node.keys[x])
-            value = Optimizer.visit(self, node.values[x])
-            if not isinstance(key, ast.Constant) or not isinstance(value, ast.Constant):
-                return node
-            new_value_keys.append((key.value, value.value))
-        return ast.Constant(dict(new_value_keys))
 
 
 class Compiler:
@@ -273,6 +241,14 @@ class Compiler:
         # Storing value
         self.visit(ast.Name(node.target.id, ast.Store()))
 
+    def visit_Subscript(self, node):
+        self.visit(node.value)
+        self.visit(node.slice)
+
+    def visit_Index(self, node):
+        self.visit(node.value)
+        self.emit("INDEX", 0)
+
 
 class VirtualMachine:
     def __init__(self):
@@ -410,6 +386,11 @@ class VirtualMachine:
             value = self.stack.pop()
             dct[key] = value
         self.stack.append(dct)
+
+    def visit_INDEX(self, oparg):
+        index = self.stack.pop()
+        value = self.stack.pop()
+        self.stack.append(value[index])
 
 
 if __name__ == "__main__":  # pragma: no cover

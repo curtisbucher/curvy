@@ -32,13 +32,35 @@ def test_ops(capsys):
     assert_out_err(capsys, "32\n", "")
 
     # Unoptimized
-    main(vm, "2; a ** 2; a % 2")
-    assert_out_err(capsys, "4\n2\n6\n1.5\n1\n9\n1\n", "")
+    main(vm, "a = 3; a ** 2;")
+    assert_out_err(capsys, "9\n", "")
+
+    main(vm, "a = 3; a % 2;")
+    assert_out_err(capsys, "1\n", "")
+
+    main(vm, "a = 3; a + 2;")
+    assert_out_err(capsys, "5\n", "")
+
+    main(vm, "a = 3; a - 2;")
+    assert_out_err(capsys, "1\n", "")
+
+    main(vm, "a = 3; a * 2;")
+    assert_out_err(capsys, "6\n", "")
+
+    main(vm, "a = 3; a / 2;")
+    assert_out_err(capsys, "1.5\n", "")
+
+    main(vm, "a = 3; a // 2;")
+    assert_out_err(capsys, "1\n", "")
 
 
 def test_bitwise_ops(capsys):
     # Testing bitwise ops
     main(vm, "(1 << 2) + (4 >> 2)")
+    assert_out_err(capsys, "5\n", "")
+
+    # Testing bitwise ops
+    main(vm, "a = 2; (1 << a) + (4 >> a)")
     assert_out_err(capsys, "5\n", "")
 
 
@@ -54,6 +76,16 @@ def test_logical_op(capsys):
     # XOR
     main(vm, "8 ^ 15")
     assert_out_err(capsys, "7\n", "")
+
+    # Unoptimized
+    main(vm, "a = 3; a & 2;")
+    assert_out_err(capsys, "2\n", "")
+
+    main(vm, "a = 3; a | 2;")
+    assert_out_err(capsys, "3\n", "")
+
+    main(vm, "a = 3; a ^ 2;")
+    assert_out_err(capsys, "1\n", "")
 
 
 def test_assignment(capsys):
@@ -106,6 +138,21 @@ def test_dict(capsys):
     assert_out_err(capsys, "{'Curtis': 3}\n", "")
 
 
+def test_unary(capsys):
+    # Unoptimized
+    main(vm, "a = 1; -a")
+    assert_out_err(capsys, "-1\n", "")
+
+    main(vm, "a = 1; +a")
+    assert_out_err(capsys, "1\n", "")
+
+    main(vm, "a = 8; ~a")
+    assert_out_err(capsys, "-9\n", "")
+
+    main(vm, "a = 1; not a")
+    assert_out_err(capsys, "False\n", "")
+
+
 def test_inplace(capsys):
     main(vm, "a = 1; a+=1; a")
     assert_out_err(capsys, "2\n", "")
@@ -127,3 +174,8 @@ def test_del(capsys):
         assert True
     else:
         assert False
+
+
+def test_subscript(capsys):
+    main(vm, "a = [1,2,3]; a[0]")
+    assert_out_err(capsys, "1\n", "")
