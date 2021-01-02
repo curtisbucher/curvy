@@ -1,4 +1,6 @@
 import ast
+from collections import defaultdict
+from itertools import count
 
 
 def main(vm, user_input):
@@ -53,6 +55,7 @@ OPNAMES = [
     "UNARY_NOT",
     "UNARY_INVERT",
     "INDEX",
+    "EXTENDED_ARG",  # args larger than 255
 ]
 
 OPCODES = {opname: opcode for opcode, opname in enumerate(OPNAMES)}
@@ -105,16 +108,38 @@ class Optimizer(ast.NodeTransformer):
 
 class Compiler:
     def __init__(self):
-        self.names = []
-        self.consts = []
+        self.names = defaultdict(count().__next__)
+        self.consts = defaultdict(count().__next__)
         self.code = []
 
     def build(self):
-        return Code(tuple(self.names), tuple(self.consts), tuple(self.code))
+        return Code(
+            tuple(self.names), tuple(v for t, v in self.consts), bytes(self.code)
+        )
+
+    def add_name(self, name) -> int:
+        return self.names[name]
+
+    def add_const(self, const) -> int:
+        return self.consts[type(const), const]
 
     def emit(self, opname, oparg):
         # Appending two items to the end of the list, not a tuple
-        self.code += (OPCODES[opname], oparg)
+
+        # Getting a list of bytes in the oparg, from least to greatest
+        opbytes = []
+        while oparg:
+            opbytes.append(oparg & 255)
+            oparg = oparg >> 8
+
+        for b in opbytes[:0:-1]:
+            self.code += (OPCODES["EXTENDED_ARG"], b)
+
+        if not opbytes:
+            opbytes = [0]
+
+        ## Operating on the bottom byte
+        self.code += (OPCODES[opname], opbytes[0])
 
     def visit(self, node):
         handler = getattr(self, f"visit_{node.__class__.__name__}")
@@ -137,22 +162,20 @@ class Compiler:
         self.visit(node.targets[-1])
 
     def visit_Constant(self, node):
-        self.emit("LOAD_CONST", len(self.consts))
-        self.consts.append(node.value)
+        self.emit("LOAD_CONST", self.add_const(node.value))
 
     def visit_Name(self, node):
+        oparg = self.add_name(node.id)
         if isinstance(node.ctx, ast.Store):
-            self.emit("STORE_NAME", len(self.names))
+            self.emit("STORE_NAME", oparg)
         elif isinstance(node.ctx, ast.Load):
-            self.emit("LOAD_NAME", len(self.names))
+            self.emit("LOAD_NAME", oparg)
         else:
             assert False, node.ctx  # pragma: no cover
-        self.names.append(node.id)
 
     def visit_Delete(self, node):
         for target in node.targets:
-            self.names.append(target.id)
-            self.emit("DEL", self.names.index(target.id))
+            self.emit("DEL", self.add_name(target.id))
 
     def visit_Tuple(self, node):
         for child in node.elts:
@@ -255,12 +278,18 @@ class VirtualMachine:
         self.stack = []
         self.variables = {}
         self.bytecode = None
+        self.oparg = 0
 
     def run(self, bytecode):
         self.bytecode = bytecode
+        real_oparg = 0
         for opcode, oparg in zip(bytecode.code[::2], bytecode.code[1::2]):
+            real_oparg = (real_oparg << 8) + oparg
+            if OPNAMES[opcode] == "EXTENDED_ARG":
+                continue
             handler = getattr(self, f"visit_{OPNAMES[opcode]}")
-            handler(oparg)
+            handler(real_oparg)
+            real_oparg = 0
         assert not self.stack, "stack should be empty!"
 
     def visit_LOAD_CONST(self, oparg):

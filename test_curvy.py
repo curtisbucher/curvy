@@ -1,4 +1,5 @@
 from curvy import main, VirtualMachine
+import pytest
 
 
 def assert_out_err(capsys, out, err):
@@ -168,14 +169,16 @@ def test_inplace(capsys):
 
 
 def test_del(capsys):
-    try:
+    with pytest.raises(KeyError):
         main(vm, "a = 1; del a; a")
-    except KeyError:
-        assert True
-    else:
-        assert False
 
 
 def test_subscript(capsys):
     main(vm, "a = [1,2,3]; a[0]")
     assert_out_err(capsys, "1\n", "")
+
+
+def test_extended_arg(capsys):
+    input_list = [x for x in range(312)]
+    main(vm, f"a = {input_list}; a")
+    assert_out_err(capsys, f"{input_list}\n", "")
