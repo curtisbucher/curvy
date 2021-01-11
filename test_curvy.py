@@ -26,7 +26,7 @@ def test_ops(capsys):
 
     # Test String Modulo
     main(vm, "'hello %s' % 'world'")
-    assert_out_err(capsys, "hello world\n", "")
+    assert_out_err(capsys, "'hello world'\n", "")
 
     # Test Power
     main(vm, "2**5")
@@ -169,14 +169,47 @@ def test_inplace(capsys):
 
 
 def test_del(capsys):
-    with pytest.raises(KeyError):
+    with pytest.raises(NameError):
         main(vm, "a = 1; del a; a")
-
 
 def test_subscript(capsys):
     main(vm, "a = [1,2,3]; a[0]")
     assert_out_err(capsys, "1\n", "")
 
+def test_if(capsys):
+    main(vm,
+"""if(1):
+    print(1)"""
+    )
+    assert_out_err(capsys, "1\n", "")
+
+#     main(vm,
+#     """"if(0):
+#     print(1)
+# else:
+#     print(2)"""
+#     )
+#     assert_out_err(capsys, "2\n", "")
+
+def test_while(capsys):
+    main(vm,
+"""a = 10
+while a:
+    a -= 1
+print(a)""")
+    assert_out_err(capsys, "0\n", "")
+
+def test_for(capsys):
+    main(vm,
+"""a = [1,2,3,4]
+for x in a:
+    print(x)"""
+)
+    assert_out_err(capsys, "1\n2\n3\n4\n", "")
+
+def test_pass(capsys):
+    main(vm, "pass")
+    assert_out_err(capsys, "", "")
 
 def test_extended_arg(capsys):
     input_list = [x for x in range(312)]

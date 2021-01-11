@@ -1,7 +1,8 @@
 import ast
 from collections import defaultdict
 from itertools import count
-
+import builtins
+import traceback
 
 def main(vm, user_input):
     tree = ast.parse(user_input)
@@ -31,9 +32,10 @@ OPNAMES = [
     "LOAD_CONST",
     "PRINT_EXPR",
     "DUP_TOP",
+    "POP_TOP",
     "LOAD_NAME",
     "STORE_NAME",
-    "DEL",
+    "DEL_NAME",
     "BUILD_LIST",
     "BUILD_TUPLE",
     "BUILD_SET",
@@ -56,6 +58,11 @@ OPNAMES = [
     "UNARY_INVERT",
     "INDEX",
     "EXTENDED_ARG",  # args larger than 255
+    "JUMP",
+    "JUMP_IF_FALSE",
+    "GET_ITER", # pops the top of the stack, turns it into an iterator and puts it back on top of the stack
+    "FOR_ITER", # Will either call next() on the top of the stack (hopefully its an iterator). If the iterator is exausted, jump to the arg
+    "CALL_FUNCTION",
 ]
 
 OPCODES = {opname: opcode for opcode, opname in enumerate(OPNAMES)}
@@ -111,8 +118,15 @@ class Compiler:
         self.names = defaultdict(count().__next__)
         self.consts = defaultdict(count().__next__)
         self.code = []
+        self.labels = {}
 
     def build(self):
+        for x in range(len(self.code)):
+            # If the item is a marker (represented by an object that is not an integer)
+            if not isinstance(self.code[x], int):
+                # Assign the marker (the arg in a jump argument) to be the location to jump to
+                self.code[x] = self.labels[self.code[x]]
+
         return Code(
             tuple(self.names), tuple(v for t, v in self.consts), bytes(self.code)
         )
@@ -141,11 +155,30 @@ class Compiler:
         ## Operating on the bottom byte
         self.code += (OPCODES[opname], opbytes[0])
 
+    def emit_jump(self, opname, marker):
+        self.code += (OPCODES[opname], marker)
+
+    def label(self, marker):
+        # Set a marker for a jump at the current position in the code.
+        # Set marker in self.labels
+        assert marker not in self.labels
+        self.labels[marker] = len(self.code) // 2
+
     def visit(self, node):
-        handler = getattr(self, f"visit_{node.__class__.__name__}")
-        handler(node)
+        if not isinstance(node, list):
+            node = [node]
+
+        for child in node:
+            handler = getattr(self, f"visit_{child.__class__.__name__}")
+            handler(child)
 
     def visit_Module(self, node):
+        # For compiling a module
+        for child in node.body:
+            self.visit(child)
+
+    def visit_Interactive(self, node): # pragma: no cover
+        # For compiling an interactive interpreter
         for child in node.body:
             self.visit(child)
 
@@ -175,7 +208,7 @@ class Compiler:
 
     def visit_Delete(self, node):
         for target in node.targets:
-            self.emit("DEL", self.add_name(target.id))
+            self.emit("DEL_NAME", self.add_name(target.id))
 
     def visit_Tuple(self, node):
         for child in node.elts:
@@ -272,24 +305,84 @@ class Compiler:
         self.visit(node.value)
         self.emit("INDEX", 0)
 
+    def visit_IfExp(self, node):
+        mark_else = object()
+        mark_end = object()
+        # test, body, orelse
+        self.visit(node.test)
+        self.emit_jump("JUMP_IF_FALSE", mark_else)
+        self.emit("POP_TOP", 0)
+        self.visit(node.body)
+        self.emit_jump("JUMP", mark_end)
+        self.label(mark_else)
+        self.emit("POP_TOP", 0)
+        self.visit(node.orelse)
+        self.label(mark_end)
+
+    def visit_If(self, node):
+        self.visit_IfExp(node)
+
+    def visit_While(self, node):
+        mark_loop = object()
+        mark_end = object()
+        self.label(mark_loop)
+        self.visit(node.test)
+        self.emit_jump("JUMP_IF_FALSE", mark_end)
+        self.emit("POP_TOP", 0)
+        self.visit(node.body)
+        self.emit_jump("JUMP", mark_loop)
+        self.label(mark_end)
+        self.emit("POP_TOP", 0)
+
+    def visit_For(self, node):
+        assert not node.orelse, "we don't support this."
+        mark_loop = object()
+        mark_end = object()
+
+        self.visit(node.iter) # for a in b<<
+        self.emit("GET_ITER", 0)
+        self.label(mark_loop)
+        self.emit_jump("FOR_ITER", mark_end)
+        self.visit(node.target) # for a<< in b
+        self.visit(node.body) # the code in the loop
+        self.emit_jump("JUMP", mark_loop)
+        self.label(mark_end)
+        self.emit("POP_TOP", 0) # Taking care of the empty iter on the stack
+
+    def visit_Pass(self, node):
+        pass
+
+    def visit_Call(self, node):
+        self.visit(node.func)
+        self.visit(node.args)
+        self.emit("CALL_FUNCTION", len(node.args))
 
 class VirtualMachine:
     def __init__(self):
         self.stack = []
-        self.variables = {}
+        self.globals = {}
+        self.builtins = vars(builtins)
+        self.builtins["__name__"] = "__main__"
         self.bytecode = None
         self.oparg = 0
+        self.pc = 0
 
     def run(self, bytecode):
         self.bytecode = bytecode
         real_oparg = 0
-        for opcode, oparg in zip(bytecode.code[::2], bytecode.code[1::2]):
+        self.pc = 0
+        code = list(zip(bytecode.code[::2], bytecode.code[1::2]))
+
+        while self.pc < len(code):
+            opcode, oparg = code[self.pc]
+            self.pc += 1
             real_oparg = (real_oparg << 8) + oparg
             if OPNAMES[opcode] == "EXTENDED_ARG":
                 continue
             handler = getattr(self, f"visit_{OPNAMES[opcode]}")
             handler(real_oparg)
             real_oparg = 0
+
         assert not self.stack, "stack should be empty!"
 
     def visit_LOAD_CONST(self, oparg):
@@ -372,23 +465,34 @@ class VirtualMachine:
         self.stack.append(~operand)
 
     def visit_PRINT_EXPR(self, oparg):
-        print(self.stack.pop())
+        output = self.stack.pop()
+        if output is not None:
+            print(repr(output))
 
     def visit_STORE_NAME(self, oparg):
         name = self.bytecode.names[oparg]
-        self.variables[name] = self.stack.pop()
+        self.globals[name] = self.stack.pop()
 
     def visit_LOAD_NAME(self, oparg):
         name = self.bytecode.names[oparg]
-        self.stack.append(self.variables[name])
 
-    def visit_DEL(self, oparg):
+        if name in self.globals:
+            self.stack.append(self.globals[name])
+        elif name in self.builtins:
+            self.stack.append(self.builtins[name])
+        else:
+            raise NameError(f"name {name!r} is not defined")
+
+    def visit_DEL_NAME(self, oparg):
         name = self.bytecode.names[oparg]
         # Deleting in virtual machine
-        del self.variables[name]
+        del self.globals[name]
 
     def visit_DUP_TOP(self, oparg):
         self.stack.append(self.stack[-1])
+
+    def visit_POP_TOP(self, oparg):
+        self.stack.pop()
 
     def visit_BUILD_TUPLE(self, oparg):
         tup = []
@@ -421,8 +525,49 @@ class VirtualMachine:
         value = self.stack.pop()
         self.stack.append(value[index])
 
+    def visit_JUMP(self, oparg):
+        self.pc = oparg
+
+    def visit_JUMP_IF_FALSE(self, oparg):
+        if not self.stack[-1]:
+            self.pc = oparg
+
+    def visit_GET_ITER(self, oparg):
+        # Pops TOS, turns it into an iter, and pushes back to TOS
+        top = self.stack.pop()
+        self.stack.append(iter(top))
+
+    def visit_FOR_ITER(self, oparg):
+        # Will either call next() on the top of the stack (hopefully its an iterator). If the iterator is exausted, jump to the arg
+        iterator = self.stack[-1]
+        try:
+            self.stack.append(next(iterator))
+        except StopIteration:
+            # If the iterator is exausted, jump
+            self.pc = oparg
+
+    def visit_CALL_FUNCTION(self, oparg):
+        # Function calls. Oparg is the number of arguments on the stack, function is under all the args
+
+        # Getting args from stack
+        args = self.stack[-oparg:]
+        self.stack = self.stack[:-oparg]
+
+        # Get func from stack
+        func = self.stack.pop()
+        # Running function and appending return to stack
+        self.stack.append(func(*args))
 
 if __name__ == "__main__":  # pragma: no cover
     vm = VirtualMachine()
     while True:
-        main(vm, input("~~ "))
+        user_input = [input("~~: ")]
+        while i := input("... "):
+            user_input.append(i)
+        try:
+            main(vm, "\n".join(user_input))
+        except SystemExit:
+            break
+        except BaseException:
+            traceback.print_exc()
+
