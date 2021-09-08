@@ -5,20 +5,23 @@ import builtins
 import traceback
 
 def main(vm, user_input):
+    # Parsing code to get tree
     tree = ast.parse(user_input)
-    compiler = Compiler()
 
     # Optimizing tree
     optimizer = Optimizer()
-    tree = optimizer.visit(tree)
+    tree = optimizer.visit(tree) ## The root node of the AST
 
     # Compiling tree and building bytecode
-    compiler.visit(tree)
+    compiler = Compiler()
+    ## Recursively generate opcodes from AST root node,
+    # save them as an attribute of `compiler`
+    compiler.visit([tree])
+    # Returning converting opcodes to bytecode
     bytecode = compiler.build()
 
-    # Runing bytecode in the virtual machine
+    # Running bytecode in the virtual machine
     vm.run(bytecode)
-
 
 class Code:
     def __init__(self, names, consts, code):
@@ -72,7 +75,7 @@ class Optimizer(ast.NodeTransformer):
     """ Given an AST, optimizes things that dont need to be compiled. Inheritance takes care of visiting functions from tree."""
 
     def visit_BinOp(self, node):
-        """ Optimizes BinOp nodes between two constants """
+        """ Optimize BinOp nodes between two constants """
         node = self.generic_visit(node)
         if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
             if isinstance(node.op, ast.Add):
@@ -102,7 +105,7 @@ class Optimizer(ast.NodeTransformer):
         return node
 
     def visit_Tuple(self, node):
-        """ Optimizes building tuple of only constants."""
+        """ Optimize building tuple of only constants."""
         self.generic_visit(node)
         new_elts = []
         for child in node.elts:
@@ -121,6 +124,9 @@ class Compiler:
         self.labels = {}
 
     def build(self):
+        """ Return a `Code` object
+        Convert attribute list of opcodes to bytecode
+        """
         for x in range(len(self.code)):
             # If the item is a marker (represented by an object that is not an integer)
             if not isinstance(self.code[x], int):
@@ -138,6 +144,8 @@ class Compiler:
         return self.consts[type(const), const]
 
     def emit(self, opname, oparg):
+        """
+        """
         # Appending two items to the end of the list, not a tuple
 
         # Getting a list of bytes in the oparg, from least to greatest
@@ -164,13 +172,15 @@ class Compiler:
         assert marker not in self.labels
         self.labels[marker] = len(self.code) // 2
 
-    def visit(self, node):
-        if not isinstance(node, list):
-            node = [node]
+    def visit(self, nodes):
+        """
+        Visit every AST node in list nodes. Call self.visit_[node] """
+        if not isinstance(nodes, list):
+            nodes = [nodes]
 
-        for child in node:
-            handler = getattr(self, f"visit_{child.__class__.__name__}")
-            handler(child)
+        for n in nodes:
+            handler = getattr(self, f"visit_{n.__class__.__name__}")
+            handler(n)
 
     def visit_Module(self, node):
         # For compiling a module
