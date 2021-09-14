@@ -14,7 +14,7 @@ Currently, all elementary operations are supported, as well as a number of commo
 
 ### Screenshots
 
-![carbon](/Users/curtisbucher/Downloads/carbon.png)
+![carbon](https://www.curtisbucher.com/uploads/curvy_terminal.png)
 
 
 
